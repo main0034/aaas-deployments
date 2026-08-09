@@ -4,12 +4,15 @@ name: plan
 # principal: this job executes against unreviewed PR content, so it must not
 # be able to change anything in the tenant.
 
+# Deliberately NO `paths:` filter.
+#
+# A path-filtered workflow does not run at all on unrelated PRs, and a
+# required status check that never runs leaves the PR stuck on "Waiting for
+# status to be reported" forever. Instead the workflow always runs, the
+# detect job decides whether there is anything to do, and the gate job at the
+# bottom always reports a result.
 on:
   pull_request:
-    paths:
-      - "deployments/**"
-      - "schemas/**"
-      - ".github/workflows/plan.yml"
 
 permissions:
   contents: read
@@ -21,6 +24,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Compensating control for CODEOWNERS.
+  #
+  # CODEOWNERS only has teeth when a branch protection rule requires code
+  # owner review, which is unavailable on private repos on the GitHub Free
+  # plan. This job enforces the same intent as a status check: the agent's
+  # PRs must not touch its own guardrails.
+  #
+  # It is weaker than branch protection - a sufficiently determined actor
+  # could edit this file in the same PR - but it turns a silent guardrail
+  # into a visibly failing check, which is most of the value.
+  #
+  # Note this means guardrail changes go straight to master, on their own,
+  # never via a PR that also does something else.
+  guardrails:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Refuse changes to protected paths
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+
+          protected=$(git diff --name-only "$base" "$head" \
+            | grep -E '^(schemas/|scripts/|\.github/|agent/)' || true)
+
+          if [ -n "$protected" ]; then
+            echo "::error::This PR modifies guardrail files:"
+            echo "$protected"
+            echo ""
+            echo "Guardrails are changed deliberately by a human, in a separate PR,"
+            echo "never in the same change that they would have blocked."
+            exit 1
+          fi
+          echo "No guardrail files touched."
+
   detect:
     runs-on: ubuntu-latest
     outputs:
@@ -170,3 +212,34 @@ jobs:
               repo: context.repo.repo,
               body,
             });
+
+  # The single check to mark as required in branch protection. It always runs
+  # and always reports, including on PRs that touch no deployments at all -
+  # which is precisely what a path-filtered workflow cannot do.
+  gate:
+    needs: [guardrails, detect, validate, plan]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate results
+        run: |
+          set -euo pipefail
+          echo "guardrails: ${{ needs.guardrails.result }}"
+          echo "detect:     ${{ needs.detect.result }}"
+          echo "validate:   ${{ needs.validate.result }}"
+          echo "plan:       ${{ needs.plan.result }}"
+
+          # 'skipped' is a pass: it means there was nothing to do, not that
+          # something went wrong.
+          for result in \
+            "${{ needs.guardrails.result }}" \
+            "${{ needs.detect.result }}" \
+            "${{ needs.validate.result }}" \
+            "${{ needs.plan.result }}"; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required job did not succeed."; exit 1 ;;
+            esac
+          done
+
+          echo "All checks passed."

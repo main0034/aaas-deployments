@@ -6,7 +6,7 @@ name: apply
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - "deployments/**"
   workflow_dispatch:
