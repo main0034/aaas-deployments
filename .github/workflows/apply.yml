@@ -1,6 +1,6 @@
 name: apply
 
-# Runs on merge to main. Uses the WRITE service principal and is gated behind
+# Runs on merge to master. Uses the WRITE service principal and is gated behind
 # the 'dev' GitHub Environment, so a required reviewer can be added later
 # without touching this file.
 
@@ -73,7 +73,7 @@ jobs:
 
       - run: pip install "jsonschema>=4.21"
 
-      # Re-validate on main. Cheap, and protects against a merge that combined
+      # Re-validate on master. Cheap, and protects against a merge that combined
       # two individually-valid PRs into something invalid.
       - name: Validate
         run: python3 scripts/validate_deployment.py ${{ matrix.deployment }}
@@ -116,7 +116,7 @@ jobs:
             -backend-config="storage_account_name=${{ vars.TFSTATE_SA }}" \
             -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}"
 
-      # Re-plan on main rather than reusing the PR artifact. Simpler, and the
+      # Re-plan on master rather than reusing the PR artifact. Simpler, and the
       # PR plan was produced by a different identity against a possibly older
       # base commit.
       - name: terraform apply
