@@ -53,7 +53,7 @@ There is no Azure credential stored anywhere. That is the point of OIDC.
 
 ## Two identities, on purpose
 
-`plan` runs against unreviewed PR content and uses a **Reader** service principal. `apply` runs only on `main` and uses a **Contributor** one. Retrofitting this split later is awkward, so it exists from the first commit.
+`plan` runs against unreviewed PR content and uses a **Reader** service principal. `apply` runs only on `master` and uses a **Contributor** one. Retrofitting this split later is awkward, so it exists from the first commit.
 
 ## Adding a deployment by hand
 
