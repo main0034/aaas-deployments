@@ -1,0 +1,163 @@
+name: apply
+
+# Runs on merge to main. Uses the WRITE service principal and is gated behind
+# the 'dev' GitHub Environment, so a required reviewer can be added later
+# without touching this file.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deployments/**"
+  workflow_dispatch:
+    inputs:
+      deployment:
+        description: "Deployment path, e.g. deployments/dev/demo"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: apply-${{ github.ref }}
+  cancel-in-progress: false # never cancel a running apply
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      deployments: ${{ steps.find.outputs.deployments }}
+      any: ${{ steps.find.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: find
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            dirs="${{ github.event.inputs.deployment }}"
+          else
+            dirs=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" \
+              | grep -E '^deployments/[^/]+/[^/]+/' \
+              | cut -d/ -f1-3 | sort -u || true)
+          fi
+
+          if [ -z "$dirs" ]; then
+            echo "any=false" >> "$GITHUB_OUTPUT"
+            echo "deployments=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "any=true" >> "$GITHUB_OUTPUT"
+          echo "deployments=$(echo "$dirs" | jq -R -s -c 'split("\n")[:-1]')" >> "$GITHUB_OUTPUT"
+
+  apply:
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    environment: dev
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        deployment: ${{ fromJSON(needs.detect.outputs.deployments) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install "jsonschema>=4.21"
+
+      # Re-validate on main. Cheap, and protects against a merge that combined
+      # two individually-valid PRs into something invalid.
+      - name: Validate
+        run: python3 scripts/validate_deployment.py ${{ matrix.deployment }}
+
+      - name: Mint GitHub App token
+        id: app_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.AAAS_APP_ID }}
+          private-key: ${{ secrets.AAAS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: aaas-infra-modules
+
+      - name: Allow Terraform to fetch the private module
+        run: |
+          git config --global url."https://x-access-token:${{ steps.app_token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_APPLY }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: terraform init
+        working-directory: ${{ matrix.deployment }}
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID_APPLY }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          terraform init \
+            -backend-config=backend.hcl \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_SA }}" \
+            -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}"
+
+      # Re-plan on main rather than reusing the PR artifact. Simpler, and the
+      # PR plan was produced by a different identity against a possibly older
+      # base commit.
+      - name: terraform apply
+        id: apply
+        working-directory: ${{ matrix.deployment }}
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID_APPLY }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_registry_password: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          terraform apply -auto-approve -input=false -var-file=terraform.tfvars.json
+          {
+            echo "app_url=$(terraform output -raw app_url)"
+            echo "resource_group=$(terraform output -raw resource_group_name)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Report result on the merged PR
+        uses: actions/github-script@v7
+        if: success()
+        env:
+          DEPLOYMENT: ${{ matrix.deployment }}
+          APP_URL: ${{ steps.apply.outputs.app_url }}
+          RESOURCE_GROUP: ${{ steps.apply.outputs.resource_group }}
+        with:
+          script: |
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+            });
+            if (prs.length === 0) return;
+            await github.rest.issues.createComment({
+              issue_number: prs[0].number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: [
+                `### Deployed — \`${process.env.DEPLOYMENT}\``,
+                ``,
+                `**URL:** ${process.env.APP_URL}`,
+                `**Resource group:** \`${process.env.RESOURCE_GROUP}\``,
+              ].join('\n'),
+            });

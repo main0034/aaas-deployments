@@ -1,0 +1,15 @@
+# The agent opens PRs against this repo. These paths are its guardrails, and
+# it must never be able to widen them without a human explicitly approving.
+#
+# Combined with a branch protection rule requiring code owner review, this is
+# what stops "the agent hit a validation error and edited the schema" from
+# being a viable failure mode.
+
+/schemas/                @main0034
+/scripts/                @main0034
+/.github/                @main0034
+/agent/                  @main0034
+
+# Deployment directories are deliberately NOT owner-gated: they are the data
+# the agent is supposed to write, and every change there is already gated by
+# schema validation, policy checks, and the plan output on the PR.

@@ -1,0 +1,172 @@
+name: plan
+
+# Runs on every PR touching a deployment. Uses the READ-ONLY service
+# principal: this job executes against unreviewed PR content, so it must not
+# be able to change anything in the tenant.
+
+on:
+  pull_request:
+    paths:
+      - "deployments/**"
+      - "schemas/**"
+      - ".github/workflows/plan.yml"
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      deployments: ${{ steps.find.outputs.deployments }}
+      any: ${{ steps.find.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: find
+        name: Find changed deployments
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+
+          dirs=$(git diff --name-only "$base" "$head" \
+            | grep -E '^deployments/[^/]+/[^/]+/' \
+            | cut -d/ -f1-3 \
+            | sort -u || true)
+
+          if [ -z "$dirs" ]; then
+            echo "any=false" >> "$GITHUB_OUTPUT"
+            echo "deployments=[]" >> "$GITHUB_OUTPUT"
+            echo "No deployment directories changed."
+            exit 0
+          fi
+
+          echo "Changed deployments:"; echo "$dirs"
+          echo "any=true" >> "$GITHUB_OUTPUT"
+          echo "deployments=$(echo "$dirs" | jq -R -s -c 'split("\n")[:-1]')" >> "$GITHUB_OUTPUT"
+
+  validate:
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install "jsonschema>=4.21"
+
+      # Fail fast, before Terraform or Azure are involved at all. Most agent
+      # mistakes should be caught here, in seconds, with a precise message.
+      - name: Validate tfvars against schema
+        run: python3 scripts/validate_deployment.py ${{ join(fromJSON(needs.detect.outputs.deployments), ' ') }}
+
+  plan:
+    needs: [detect, validate]
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        deployment: ${{ fromJSON(needs.detect.outputs.deployments) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Short-lived token so Terraform can fetch the private modules repo.
+      - name: Mint GitHub App token
+        id: app_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.AAAS_APP_ID }}
+          private-key: ${{ secrets.AAAS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: aaas-infra-modules
+
+      - name: Allow Terraform to fetch the private module
+        run: |
+          git config --global url."https://x-access-token:${{ steps.app_token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_PLAN }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: terraform init
+        working-directory: ${{ matrix.deployment }}
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID_PLAN }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          terraform init \
+            -backend-config=backend.hcl \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_SA }}" \
+            -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}"
+
+      - name: terraform fmt
+        working-directory: ${{ matrix.deployment }}
+        run: terraform fmt -check
+
+      - name: terraform validate
+        working-directory: ${{ matrix.deployment }}
+        run: terraform validate
+
+      - name: terraform plan
+        id: plan
+        working-directory: ${{ matrix.deployment }}
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID_PLAN }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_registry_password: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          set -o pipefail
+          terraform plan -no-color -input=false -var-file=terraform.tfvars.json -out=tfplan \
+            | tee plan.txt
+
+      - name: Comment plan on PR
+        uses: actions/github-script@v7
+        if: always()
+        env:
+          DEPLOYMENT: ${{ matrix.deployment }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = `${process.env.DEPLOYMENT}/plan.txt`;
+            let body;
+            if (fs.existsSync(path)) {
+              let plan = fs.readFileSync(path, 'utf8');
+              // GitHub comments cap at 65536 chars.
+              if (plan.length > 60000) {
+                plan = plan.slice(0, 60000) + '\n\n... truncated, see the workflow log for the full plan.';
+              }
+              body = `### Terraform plan — \`${process.env.DEPLOYMENT}\`\n\n<details><summary>Show plan</summary>\n\n\`\`\`terraform\n${plan}\n\`\`\`\n\n</details>`;
+            } else {
+              body = `### Terraform plan — \`${process.env.DEPLOYMENT}\`\n\nPlan did not produce output. See the workflow log.`;
+            }
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });

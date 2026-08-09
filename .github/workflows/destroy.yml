@@ -1,0 +1,97 @@
+name: destroy
+
+# Manual teardown. Built in Phase 2 rather than "later" on purpose: without
+# it you accumulate Postgres servers during Phase 4/5 iteration and the bill
+# is a genuine surprise.
+#
+# Requires typing the deployment name twice - once as a path, once as
+# confirmation - because there is no undo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment:
+        description: "Deployment path, e.g. deployments/dev/demo"
+        required: true
+      confirm:
+        description: "Type the deployment NAME (e.g. demo) to confirm destruction"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm intent
+        run: |
+          set -euo pipefail
+          expected=$(basename "${{ github.event.inputs.deployment }}")
+          if [ "$expected" != "${{ github.event.inputs.confirm }}" ]; then
+            echo "Confirmation '${{ github.event.inputs.confirm }}' does not match deployment name '$expected'. Aborting."
+            exit 1
+          fi
+          if [ ! -d "${{ github.event.inputs.deployment }}" ]; then
+            echo "No such deployment directory. Aborting."
+            exit 1
+          fi
+
+      - name: Mint GitHub App token
+        id: app_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.AAAS_APP_ID }}
+          private-key: ${{ secrets.AAAS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: aaas-infra-modules
+
+      - name: Allow Terraform to fetch the private module
+        run: |
+          git config --global url."https://x-access-token:${{ steps.app_token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_APPLY }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: terraform init
+        working-directory: ${{ github.event.inputs.deployment }}
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID_APPLY }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          terraform init \
+            -backend-config=backend.hcl \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_SA }}" \
+            -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}"
+
+      # Postgres deletion is slow; allow plenty of time before the job is cut off.
+      - name: terraform destroy
+        timeout-minutes: 60
+        working-directory: ${{ github.event.inputs.deployment }}
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID_APPLY }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_registry_password: ${{ secrets.GHCR_READ_TOKEN }}
+        run: terraform destroy -auto-approve -input=false -var-file=terraform.tfvars.json
+
+      - name: Reminder
+        run: |
+          echo "Infrastructure destroyed. The deployment directory is still in git -"
+          echo "remove it in a follow-up PR if this deployment is gone for good."
