@@ -31,6 +31,17 @@ terraform {
 provider "azurerm" {
   use_oidc = true
 
+  # By default the provider tries to register every resource provider it
+  # supports - roughly a hundred of them, including things this stack will
+  # never touch. The plan identity is deliberately Reader-only, so those
+  # attempts fail with 403 and abort the run.
+  #
+  # bootstrap.sh registers the specific providers this module needs, which is
+  # both the least-privilege answer and the faster one. If a future module
+  # adds a resource type, register its provider there rather than widening
+  # these credentials.
+  resource_provider_registrations = "none"
+
   features {
     key_vault {
       purge_soft_delete_on_destroy    = true
@@ -43,7 +54,7 @@ provider "azurerm" {
 }
 
 module "app" {
-  source = "git::https://github.com/main0034/aaas-infra-modules.git//modules/app-stack?ref=v0.1.0"
+  source = "git::https://github.com/main0034/aaas-infra-modules.git//modules/app-stack?ref=v0.1.1"
 
   name            = var.name
   environment     = var.environment
