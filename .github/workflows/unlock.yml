@@ -1,0 +1,90 @@
+name: unlock
+
+# Break a stale Terraform state lock.
+#
+# The azurerm backend locks state with a blob lease. If a run is cancelled
+# mid-operation - a cancelled workflow, a closed browser tab, a runner that
+# dies - the lease is never released and every subsequent plan, apply and
+# destroy fails with "state blob is already locked". There is no way out from
+# inside the pipeline, which is why this exists.
+#
+# DANGER: only run this when you are certain no Terraform operation is still
+# in progress. Breaking a lock on a LIVE apply can corrupt state, which is a
+# far worse problem than a stuck lock. Check the Actions tab first.
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment:
+        description: "Deployment path, e.g. deployments/dev/demo"
+        required: true
+      confirm:
+        description: "Type UNLOCK to confirm no Terraform run is in progress"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  unlock:
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm intent
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.inputs.confirm }}" != "UNLOCK" ]; then
+            echo "::error::Confirmation must be exactly 'UNLOCK'. Aborting."
+            exit 1
+          fi
+          if [ ! -d "${{ github.event.inputs.deployment }}" ]; then
+            echo "::error::No such deployment directory."
+            exit 1
+          fi
+
+      - name: Refuse if another Terraform workflow is running
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Cheap guard against the dangerous case. Not foolproof - a run
+            // can be cancelled while Azure operations continue - but it
+            // catches the obvious mistake of unlocking a live apply.
+            const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              status: 'in_progress',
+              per_page: 50,
+            });
+            const others = data.workflow_runs.filter(
+              r => r.id !== context.runId && ['apply', 'destroy', 'plan'].includes(r.name)
+            );
+            if (others.length > 0) {
+              core.setFailed(
+                `Refusing to unlock: ${others.map(r => `${r.name} #${r.run_number}`).join(', ')} still running.`
+              );
+            }
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_APPLY }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Break the state lease
+        env:
+          DEPLOYMENT: ${{ github.event.inputs.deployment }}
+        run: |
+          set -euo pipefail
+          key=$(grep -E '^\s*key\s*=' "${DEPLOYMENT}/backend.hcl" | cut -d'"' -f2)
+          echo "State blob: ${key}"
+
+          az storage blob lease break \
+            --account-name "${{ vars.TFSTATE_SA }}" \
+            --container-name "${{ vars.TFSTATE_CONTAINER }}" \
+            --blob-name "${key}" \
+            --auth-mode login
+
+          echo "Lease broken. Re-run plan, apply or destroy as needed."
