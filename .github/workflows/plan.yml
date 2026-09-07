@@ -183,7 +183,28 @@ jobs:
           TF_VAR_registry_password: ${{ secrets.GHCR_READ_TOKEN }}
         run: |
           set -o pipefail
-          terraform plan -no-color -input=false -var-file=terraform.tfvars.json -out=tfplan \
+          # -refresh=false is required, not an optimisation.
+          #
+          # The azurerm provider calls Microsoft.App/containerApps/listSecrets
+          # on EVERY Container App read - unconditionally, whether or not the
+          # resource has secrets. See
+          # https://github.com/hashicorp/terraform-provider-azurerm/issues/31181
+          #
+          # The plan identity is Reader by design, so a refreshing plan always
+          # fails 403. The alternatives were worse: granting the plan identity
+          # permission to read secrets, while it runs Terraform against
+          # unreviewed PR content, or abandoning the read/write split.
+          #
+          # Trade-off: this plan will not detect drift, because it compares
+          # config against state rather than against Azure. Acceptable here
+          # because Terraform is the only writer. If that stops being true,
+          # add a scheduled drift-detection workflow running a refreshing
+          # plan under the APPLY identity - do not weaken this one.
+          #
+          # `apply` refreshes normally; it runs as Contributor, which includes
+          # listSecrets.
+          terraform plan -no-color -input=false -refresh=false \
+            -var-file=terraform.tfvars.json -out=tfplan \
             | tee plan.txt
 
       - name: Comment plan on PR
@@ -195,6 +216,7 @@ jobs:
           script: |
             const fs = require('fs');
             const path = `${process.env.DEPLOYMENT}/plan.txt`;
+            const caveat = '> Plan run with `-refresh=false`: compared against Terraform state, not live Azure. Drift is not detected here.\n\n';
             let body;
             if (fs.existsSync(path)) {
               let plan = fs.readFileSync(path, 'utf8');
@@ -202,7 +224,7 @@ jobs:
               if (plan.length > 60000) {
                 plan = plan.slice(0, 60000) + '\n\n... truncated, see the workflow log for the full plan.';
               }
-              body = `### Terraform plan — \`${process.env.DEPLOYMENT}\`\n\n<details><summary>Show plan</summary>\n\n\`\`\`terraform\n${plan}\n\`\`\`\n\n</details>`;
+              body = `### Terraform plan — \`${process.env.DEPLOYMENT}\`\n\n${caveat}<details><summary>Show plan</summary>\n\n\`\`\`terraform\n${plan}\n\`\`\`\n\n</details>`;
             } else {
               body = `### Terraform plan — \`${process.env.DEPLOYMENT}\`\n\nPlan did not produce output. See the workflow log.`;
             }
