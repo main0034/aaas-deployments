@@ -54,7 +54,7 @@ provider "azurerm" {
 }
 
 module "app" {
-  source = "git::https://github.com/main0034/aaas-infra-modules.git//modules/app-stack?ref=v0.1.1"
+  source = "git::https://github.com/main0034/aaas-infra-modules.git//modules/app-stack?ref=v0.1.2"
 
   name            = var.name
   environment     = var.environment
