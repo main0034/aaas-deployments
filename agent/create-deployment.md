@@ -65,12 +65,19 @@ Fix the tfvars until this passes. Do not edit the schema.
 
 ## 6. Open the PR
 
+Write the PR body to a file first, with the Write tool, then point `gh` at it:
+
 ```bash
 git add deployments/dev/<name>
 git commit -m "feat(<name>): add dev deployment"
 git push -u origin deploy/<name>
-gh pr create --title "feat(<name>): add dev deployment" --body "..."
+gh pr create --title "feat(<name>): add dev deployment" --body-file /tmp/pr-body.md
 ```
+
+`--body-file`, not `--body "$(cat <<EOF ...)"`. Command substitution is refused
+by the harness, because it hides the command actually being run from the check
+that decides whether to allow it. `/tmp` is writable for exactly this. The same
+reason is why `release.yml` writes its body to a file.
 
 The PR body should say, in language a non-technical person can follow:
 
