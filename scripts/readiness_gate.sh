@@ -14,6 +14,8 @@
 #   1. Find the revision this apply produced.
 #   2. Poke the app so a replica starts, and poll that revision until it is
 #      Running and is the latest ready revision - or fails, or times out.
+#      A failing init container is retried: on 23 September the revision sat
+#      in Activating for 293s before ActivationFailed. Hence the 600s default.
 #   3. Only then ask /ready (Single revision mode: the new revision is now the
 #      one answering) and require database == ok.
 #   4. On failure, pull the init container's own log from Log Analytics, because
@@ -26,7 +28,7 @@ set -uo pipefail
 
 RG="${RESOURCE_GROUP:?RESOURCE_GROUP is required}"
 APP_URL="${APP_URL:?APP_URL is required}"
-READY_TIMEOUT="${GATE_READY_TIMEOUT_SECONDS:-420}"
+READY_TIMEOUT="${GATE_READY_TIMEOUT_SECONDS:-600}"
 LOG_TIMEOUT="${GATE_LOG_TIMEOUT_SECONDS:-360}"
 POLL="${GATE_POLL_SECONDS:-10}"
 OUT="${GITHUB_OUTPUT:-/dev/null}"
@@ -68,7 +70,13 @@ fetch_logs() {
   done
 
   if [ -n "$rows" ]; then
-    echo "$rows"
+    # The raw rows go to the Actions log only. Filtered by revision name they
+    # still included another run's successful migrate output, and stack-trace
+    # lines sharing a timestamp come back interleaved, so the full dump reads
+    # as if the migration both passed and failed. The runner's own [migrate]
+    # lines are the legible part.
+    { echo "--- raw migrate container log ---"; echo "$rows"; echo "---"; } >&2
+    grep '^\[migrate\]' <<<"$rows" | awk '!seen[$0]++'
   else
     echo "(no output from the migrate init container reached Log Analytics within ${LOG_TIMEOUT}s - the cause may not be the migration)"
   fi
