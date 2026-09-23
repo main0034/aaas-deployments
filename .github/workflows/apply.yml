@@ -135,15 +135,60 @@ jobs:
             echo "resource_group=$(terraform output -raw resource_group_name)"
           } >> "$GITHUB_OUTPUT"
 
+      # D-22. A green apply says Terraform did its job, not that the app runs:
+      # at min_replicas = 0 a revision whose migration fails is "deployed"
+      # successfully and broken (FINDINGS.md, finding 16). This asks the
+      # platform whether the new revision actually started. Runs on the first
+      # apply too, where failing means the app has never worked.
+      - name: Readiness gate
+        id: gate
+        env:
+          RESOURCE_GROUP: ${{ steps.apply.outputs.resource_group }}
+          APP_URL: ${{ steps.apply.outputs.app_url }}
+        run: bash scripts/readiness_gate.sh
+
+      # Runs whether or not the gate passed, so a red deploy is explained on the
+      # PR rather than only in the Actions log. The job is already red when the
+      # gate failed; this step only reports.
       - name: Report result on the merged PR
         uses: actions/github-script@v7
-        if: success()
+        if: always() && steps.apply.outcome == 'success'
         env:
           DEPLOYMENT: ${{ matrix.deployment }}
           APP_URL: ${{ steps.apply.outputs.app_url }}
           RESOURCE_GROUP: ${{ steps.apply.outputs.resource_group }}
+          GATE_RESULT: ${{ steps.gate.outputs.result }}
+          GATE_REASON: ${{ steps.gate.outputs.reason }}
+          GATE_REVISION: ${{ steps.gate.outputs.revision }}
+          GATE_MIGRATION: ${{ steps.gate.outputs.migration }}
+          GATE_LOG: ${{ steps.gate.outputs.log }}
         with:
           script: |
+            const env = process.env;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const ok = env.GATE_RESULT === 'ok';
+            const firstFailure = (env.GATE_LOG || '').split('\n').find(l => l.startsWith('[migrate] FAILED')) || '';
+
+            const body = ok ? [
+              `### Deployed — \`${env.DEPLOYMENT}\``,
+              ``,
+              `**URL:** ${env.APP_URL}`,
+              `**Resource group:** \`${env.RESOURCE_GROUP}\``,
+              `**Revision:** \`${env.GATE_REVISION}\` — running, readiness gate passed`,
+              `**Schema:** \`${env.GATE_MIGRATION}\``,
+            ] : [
+              `### Deploy failed — \`${env.DEPLOYMENT}\``,
+              ``,
+              `Terraform applied, but **the new revision is not running**.`,
+              ``,
+              `**Reason:** ${env.GATE_REASON || 'the readiness gate did not complete — see the run log'}`,
+              ...(firstFailure ? [`**Cause:** \`${firstFailure}\``] : []),
+              `**URL:** ${env.APP_URL}`,
+              `**Revision:** \`${env.GATE_REVISION || 'unknown'}\``,
+              `**Run:** ${runUrl}`,
+              ...(env.GATE_LOG ? [``, `<details><summary>Init container and platform log</summary>`, ``, '```', env.GATE_LOG, '```', `</details>`] : []),
+            ];
+
             const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -154,10 +199,5 @@ jobs:
               issue_number: prs[0].number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: [
-                `### Deployed — \`${process.env.DEPLOYMENT}\``,
-                ``,
-                `**URL:** ${process.env.APP_URL}`,
-                `**Resource group:** \`${process.env.RESOURCE_GROUP}\``,
-              ].join('\n'),
+              body: body.join('\n'),
             });
