@@ -79,6 +79,39 @@ jobs:
             -backend-config="storage_account_name=${{ vars.TFSTATE_SA }}" \
             -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}"
 
+      # Finding 18: destroy hung for 30+ minutes, twice, on the Postgres
+      # server's three child resources (database, Entra administrator, the
+      # require_secure_transport setting). Nothing depends on them, so
+      # Terraform deletes all three first and in parallel, against a server
+      # that takes one management operation at a time - and the Entra-only
+      # server's sole administrator may not be removable at all. Everything
+      # else waits behind them. Deleting the resource group, which removes the
+      # server whole, took seconds.
+      #
+      # None of these deletions is useful: deleting the server deletes them.
+      # So Terraform forgets them first and deletes the server directly.
+      # Matched by type, not address, so it survives a module rename.
+      # If the destroy then fails, they remain in Azure only as parts of a
+      # server Terraform still manages - the next destroy removes them with it.
+      - name: Drop Postgres child resources from state
+        working-directory: ${{ github.event.inputs.deployment }}
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID_APPLY }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          children=$(terraform state list \
+            | grep -E 'azurerm_postgresql_flexible_server_(database|active_directory_administrator|configuration)\.' || true)
+          if [ -z "$children" ]; then
+            echo "No Postgres child resources in state."
+            exit 0
+          fi
+          while read -r addr; do
+            terraform state rm "$addr"
+          done <<< "$children"
+
       # Postgres deletion is slow; allow plenty of time before the job is cut off.
       - name: terraform destroy
         timeout-minutes: 60
