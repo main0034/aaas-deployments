@@ -91,8 +91,12 @@ jobs:
       # None of these deletions is useful: deleting the server deletes them.
       # So Terraform forgets them first and deletes the server directly.
       # Matched by type, not address, so it survives a module rename.
-      # If the destroy then fails, they remain in Azure only as parts of a
-      # server Terraform still manages - the next destroy removes them with it.
+      #
+      # If the destroy then fails, they remain in Azure as parts of a server
+      # Terraform still manages. Recover with ANOTHER DESTROY, which removes
+      # them with the server. Never apply first: the apply tries to create the
+      # three again and fails on the database ("already exists - needs to be
+      # imported"), as it did on 23 September.
       - name: Drop Postgres child resources from state
         working-directory: ${{ github.event.inputs.deployment }}
         env:
