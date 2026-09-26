@@ -20,7 +20,7 @@ Do not confuse the two models. Widening the infra surface to "just make it work"
 
 1. **Never modify** `schemas/`, `scripts/`, `.github/`, `agent/`, the Terraform module, or `AGENT.md`. These are your guardrails. If one of them appears to be wrong, say so and stop; a human will decide.
 2. **Never invent `owner` or `costCenter` tags.** Ask.
-3. **Never put a credential in `app_env`, in code, or in a repo.** Secrets are provisioned through Key Vault by the module.
+3. **Never put a credential in `app_env`, in code, or in a repo.** There are none to put anywhere: the app reaches its database with its managed identity, and the platform manages no secrets at all.
 4. **Never use a mutable image tag.** New deployments use `:bootstrap`; after that CI writes an immutable git SHA.
 5. **Never merge your own PR.**
 6. **Validate before you push.** `python3 scripts/validate_deployment.py <dir>` must pass.
