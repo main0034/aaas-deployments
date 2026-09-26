@@ -3,16 +3,9 @@
 Produces one PR against an application repository. Assumes the repository
 already exists.
 
-**Not yet exercised by a real run.** Written alongside the harness so the pair
-is reviewable together; the first run to use it is Phase 4c, and anything here
-that turns out to be wrong should be corrected from that run rather than
+First run: `20260926T142507Z` (FINDINGS.md #21) - prompt to green PR in 4m 11s.
+Where a step below was wrong, it has been corrected from that run rather than
 defended.
-
-**Not yet runnable either.** The harness image has no .NET SDK and its command
-policy allows only `git`, `gh`, `jq` and the schema validator, so every
-`dotnet` command below would be refused. Adding both is the first step of
-Phase 4c. Until then this runbook describes the target, not something the
-agent can do.
 
 ## 0. What has already been done for you
 
@@ -130,18 +123,34 @@ Every new route gets a test, and tests must pass with **no database available**.
 If a test needs Postgres, the design is probably wrong — the logic under test
 should be separable from the connection.
 
+A test that only shows a route answers 503 without a database proves the route
+exists, not that it works. Put the behaviour - a filter, a state change - in a
+method on the entity or an `IQueryable` extension, and test that directly
+against an in-memory list. The first run's tests were all of the 503 kind, and
+its `?open=true` filter ran after `Take(100)`: green CI, wrong once there are
+more than 100 items (FINDINGS.md #21).
+
 **Do not open a PR with failing tests.** The evidence that generated code is
 correct is that the tests pass; a PR without that evidence is asking a human to
 do the part you were supposed to do.
 
 ## 5. Open the PR
 
+Write the commit message to `/tmp/commit-msg.txt` and the PR body to
+`/tmp/pr-body.md` with the Write tool first. A heredoc inside `$(...)` is
+refused - it hides the command from the policy check - and the first run lost a
+turn to exactly that.
+
 ```bash
 git add -A
-git commit -m "feat: <what this adds>"
+git commit -F /tmp/commit-msg.txt
 git push -u origin feat/<short-description>
 gh pr create --title "feat: <what this adds>" --body-file /tmp/pr-body.md
 ```
+
+`git push` authenticates through `gh`, which the harness has already set up. If
+it fails on authentication, **stop and say so** - do not put the token in a URL
+or look for another way to push.
 
 Write the body for the person who asked, not for a reviewer of code:
 
