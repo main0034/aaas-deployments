@@ -129,7 +129,7 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           TF_VAR_registry_password: ${{ secrets.GHCR_READ_TOKEN }}
         run: |
-          terraform apply -auto-approve -input=false -var-file=terraform.tfvars.json
+          terraform apply -auto-approve -input=false -lock-timeout=10m -var-file=terraform.tfvars.json
           {
             echo "app_url=$(terraform output -raw app_url)"
             echo "resource_group=$(terraform output -raw resource_group_name)"

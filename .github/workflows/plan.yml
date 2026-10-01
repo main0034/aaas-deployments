@@ -203,7 +203,7 @@ jobs:
           #
           # `apply` refreshes normally; it runs as Contributor, which includes
           # listSecrets.
-          terraform plan -no-color -input=false -refresh=false \
+          terraform plan -no-color -input=false -refresh=false -lock-timeout=10m \
             -var-file=terraform.tfvars.json -out=tfplan \
             | tee plan.txt
 
