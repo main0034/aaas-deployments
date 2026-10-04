@@ -37,6 +37,10 @@ Then test each one. For each statement:
   already the expected order.
 - **Exclusions.** Every "is not in the list" needs a row that would be in it
   otherwise.
+- **Rules about a set apply to every member.** "Only when it has no items" is
+  still false when its only items are done, archived or otherwise filtered out of
+  some list. Test the rule with members of each state the app has, not just the
+  obvious one.
 - **Combinations the request names.** If filters "work together", combine them.
 - **Every status code the Interface lists**, including 404 and 409 paths.
 - **"Refused, and nothing changed"**: after a refused request, read the state back.
