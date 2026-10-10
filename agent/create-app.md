@@ -108,7 +108,8 @@ adding a package, run `dotnet restore` and commit the updated
 ## 4. Prove it before anyone looks at it
 
 ```bash
-dotnet format
+dotnet csharpier format .
+python3 scripts/check-test-layout.py --files <each test file you added or changed>
 dotnet build -c Release
 dotnet test -c Release --no-build
 dotnet ef migrations has-pending-model-changes --project src/App --no-build --configuration Release
@@ -171,7 +172,9 @@ Read the actual failure in the Actions log — not the summary line.
 
 Most likely, in order:
 
-1. `format` — run `dotnet format` and commit the result
+1. `format (CSharpier)` — run `dotnet csharpier format .` and commit the result.
+   `tests are Arrange / Act / Assert` — lay the named test out as AGENT.md's
+   "Conventions" shows
 2. `build` — a compiler warning; warnings are errors
 3. A test that assumed a database
 4. `model has a migration` — the model changed without `dotnet ef migrations add`

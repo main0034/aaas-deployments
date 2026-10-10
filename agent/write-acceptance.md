@@ -65,9 +65,15 @@ public sealed class ProjectsAcceptance(App.Tests.Postgres.TemplateDatabase t) : 
     [Fact]
     public async Task Done_items_are_not_listed()
     {
+        // Arrange
         await CreateItemAsync("keep", 2);
         await MarkDoneAsync(await CreateItemAsync("gone", 1));
-        Assert.Equal(["keep"], Titles(await GetAsync("/items/priority")));
+
+        // Act
+        var list = await GetAsync("/items/priority");
+
+        // Assert
+        Assert.Equal(["keep"], Titles(list));
     }
 }
 ```
@@ -81,16 +87,23 @@ public sealed class ProjectsAcceptance(App.Tests.Postgres.TemplateDatabase t) : 
 - "Added first" or "newest" means the order rows were created through the API.
 - "Today" is the UTC date, computed in the test.
 - One behaviour per test, named as a sentence.
+- **Laid out Arrange / Act / Assert**, with those comments, as AGENT.md's
+  "Conventions" says. A block body, never `=> ...`. When the call is the assertion
+  (a helper's `expect` argument), one `// Act & Assert`.
 
 ## 4. Prove it compiles, then stop
 
 ```bash
-dotnet format tests/App.Tests --include tests/App.Tests/Acceptance/
+dotnet tool restore
+dotnet csharpier format tests/App.Tests/Acceptance/
+python3 scripts/check-test-layout.py --files tests/App.Tests/Acceptance/<Name>Acceptance.cs
 dotnet build tests/App.Tests
 ```
 
 It must build with no warnings - CI builds your file with warnings as errors and
-fails on any formatting change, the same as the application's own code. Running it proves nothing here: there is no database, so the tests
+checks its formatting and layout, the same as the application's own code. If the
+repository has no `csharpier` in `dotnet-tools.json` or no
+`scripts/check-test-layout.py`, skip that command. Running it proves nothing here: there is no database, so the tests
 skip, and the routes do not exist yet. Do not change anything outside
 `tests/App.Tests/Acceptance/`.
 
