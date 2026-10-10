@@ -53,8 +53,9 @@ ignored:
   them in an init container before each new version starts. See section 3.
 
 Never edit the files `AGENT.md` lists as off-limits: `Dockerfile`,
-`.github/workflows/`, `scripts/check-migrations.sh`, `Directory.Build.props`,
-`global.json`, `.editorconfig`, `.aaas/deployment`, `AGENT.md`. If one of them
+`.github/workflows/`, `scripts/check-migrations.sh`, `scripts/check-changes.sh`,
+`changes/`, `Directory.Build.props`, `global.json`, `.editorconfig`,
+`.aaas/deployment`, `AGENT.md`. If one of them
 genuinely needs to change, say so and stop.
 
 ## 2. Understand the request before writing code
@@ -119,16 +120,18 @@ commands, then checks the migration history, builds the image, smoke-tests
 `/health` with no database, and applies your migrations twice to a real Postgres
 before exercising the app against it. A failure here is a failure there.
 
-Every new route gets a test, and tests must pass with **no database available**.
-If a test needs Postgres, the design is probably wrong — the logic under test
-should be separable from the connection.
+Every new or changed route gets an **endpoint test against Postgres**, as
+`AGENT.md` describes ("Every new or changed route gets an endpoint test"): derive
+from `EndpointTest`, seed rows, call the route, assert exactly which rows come
+back. There is no database here, so those tests skip locally; CI runs them, and a
+skipped or missing endpoint test is red there. A test that only shows a route
+answers 503 without a database, or that checks an `IQueryable` against an
+in-memory list, proves nothing about the route: three runs passed exactly such
+tests with a bug in them (FINDINGS.md #21, #23, #24).
 
-A test that only shows a route answers 503 without a database proves the route
-exists, not that it works. Put the behaviour - a filter, a state change - in a
-method on the entity or an `IQueryable` extension, and test that directly
-against an in-memory list. The first run's tests were all of the 503 kind, and
-its `?open=true` filter ran after `Take(100)`: green CI, wrong once there are
-more than 100 items (FINDINGS.md #21).
+If the repository has a `changes/` directory, the acceptance tests of every
+earlier change in it run with the endpoint tests. Keep them green; never edit them
+(`AGENT.md`, "The change record").
 
 **Do not open a PR with failing tests.** The evidence that generated code is
 correct is that the tests pass; a PR without that evidence is asking a human to
