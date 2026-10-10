@@ -5,11 +5,12 @@
 # deployments lives in terraform.tfvars.json, which is the only file the agent
 # writes and the only file CI validates against a schema.
 #
-# The module source uses HTTPS. Because aaas-infra-modules is private, CI
-# rewrites github.com URLs to inject a short-lived GitHub App token before
-# running `terraform init` (see .github/workflows/plan.yml).
+# The module source uses HTTPS. CI rewrites github.com URLs to inject a
+# short-lived GitHub App token before running `terraform init` (see
+# .github/workflows/plan.yml).
 #
-# Bump `ref` deliberately to adopt a new module version.
+# Bump `ref` and `module_version` together, deliberately, to adopt a new
+# module version.
 ###############################################################################
 
 terraform {
@@ -54,7 +55,11 @@ provider "azurerm" {
 }
 
 module "app" {
-  source = "git::https://github.com/main0034/aaas-infra-modules.git//modules/app-stack?ref=v0.3.2"
+  source = "git::https://github.com/main0034/aaas-infra-modules.git//modules/app-stack?ref=v0.4.0"
+
+  # The same release as ?ref= above, without the v. app-stack checks it and tags
+  # every resource with it; scripts/validate_deployment.py checks the two agree.
+  module_version = "0.4.0"
 
   name            = var.name
   environment     = var.environment
@@ -84,6 +89,10 @@ module "app" {
 
 output "app_url" {
   value = module.app.app_url
+}
+
+output "module_version" {
+  value = module.app.module_version
 }
 
 output "postgres_fqdn" {
