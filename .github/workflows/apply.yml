@@ -9,6 +9,8 @@ on:
     branches: [master]
     paths:
       - "deployments/**"
+      # The record job below writes these; they describe what ran, not what to run.
+      - "!deployments/**/applied.json"
   workflow_dispatch:
     inputs:
       deployment:
@@ -133,6 +135,7 @@ jobs:
           {
             echo "app_url=$(terraform output -raw app_url)"
             echo "resource_group=$(terraform output -raw resource_group_name)"
+            echo "module_version=$(terraform output -raw module_version 2>/dev/null || echo unknown)"
           } >> "$GITHUB_OUTPUT"
 
       # D-22. A green apply says Terraform did its job, not that the app runs:
@@ -161,6 +164,7 @@ jobs:
           GATE_REASON: ${{ steps.gate.outputs.reason }}
           GATE_REVISION: ${{ steps.gate.outputs.revision }}
           GATE_MIGRATION: ${{ steps.gate.outputs.migration }}
+          MODULE_VERSION: ${{ steps.apply.outputs.module_version }}
           GATE_LOG: ${{ steps.gate.outputs.log }}
         with:
           script: |
@@ -176,6 +180,7 @@ jobs:
               `**Resource group:** \`${env.RESOURCE_GROUP}\``,
               `**Revision:** \`${env.GATE_REVISION}\` — running, readiness gate passed`,
               `**Schema:** \`${env.GATE_MIGRATION}\``,
+              `**Module:** \`app-stack@${env.MODULE_VERSION}\` (recorded in \`${env.DEPLOYMENT}/applied.json\`)`,
             ] : [
               `### Deploy failed — \`${env.DEPLOYMENT}\``,
               ``,
@@ -201,3 +206,85 @@ jobs:
               repo: context.repo.repo,
               body: body.join('\n'),
             });
+
+      # OQ-16, OQ-21: what this estate now runs, as observed after a green gate -
+      # not what was asked for. App CI reads it to tell an applied migration from
+      # one that never reached the database. Handed to the record job as an
+      # artifact, so this job, which holds the Azure write identity, keeps a
+      # read-only GITHUB_TOKEN.
+      - name: Describe what the estate runs
+        id: describe
+        if: steps.gate.outputs.result == 'ok'
+        env:
+          DEPLOYMENT: ${{ matrix.deployment }}
+          MODULE_VERSION: ${{ steps.apply.outputs.module_version }}
+          REVISION: ${{ steps.gate.outputs.revision }}
+          MIGRATION: ${{ steps.gate.outputs.migration }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/applied/$DEPLOYMENT"
+          jq -n \
+            --arg deployment "$DEPLOYMENT" \
+            --arg image "$(jq -r .container_image "$DEPLOYMENT/terraform.tfvars.json")" \
+            --arg module "app-stack@$MODULE_VERSION" \
+            --arg migration "$MIGRATION" \
+            --arg revision "$REVISION" \
+            --arg commit "$GITHUB_SHA" \
+            --arg applied_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg run "$RUN_URL" \
+            '{deployment: $deployment, image: $image, module: $module, migration: $migration,
+              revision: $revision, commit: $commit, applied_at: $applied_at, run: $run}' \
+            > "$RUNNER_TEMP/applied/$DEPLOYMENT/applied.json"
+          cat "$RUNNER_TEMP/applied/$DEPLOYMENT/applied.json"
+          echo "name=applied-$(echo "$DEPLOYMENT" | tr '/' '-')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.describe.outcome == 'success'
+        with:
+          name: ${{ steps.describe.outputs.name }}
+          path: ${{ runner.temp }}/applied
+          retention-days: 7
+
+  # Commits each estate's applied.json to master. A push made with GITHUB_TOKEN
+  # starts no workflow, and the paths filter above excludes the file anyway, so
+  # recording an apply never triggers another one.
+  record:
+    needs: apply
+    if: always() && needs.apply.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: applied-*
+          path: ${{ runner.temp }}/applied
+          merge-multiple: true
+
+      - name: Commit the records
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/applied"
+          [ -d "$src" ] || { echo "No green applies to record."; exit 0; }
+          (cd "$src" && find . -name applied.json) | while read -r f; do
+            cp "$src/$f" "$f"
+            git add "$f"
+          done
+          if git diff --cached --quiet; then
+            echo "Nothing changed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: record applied state ($(git diff --cached --name-only | tr '\n' ' '))"
+          for i in 1 2 3; do
+            git push origin HEAD:master && exit 0
+            git pull --rebase origin master
+          done
+          echo "::error::Could not push the applied record after 3 attempts."
+          exit 1

@@ -51,10 +51,10 @@ jobs:
           head="${{ github.event.pull_request.head.sha }}"
 
           protected=$(git diff --name-only "$base" "$head" \
-            | grep -E '^(schemas/|scripts/|\.github/|agent/)' || true)
+            | grep -E '^(schemas/|scripts/|\.github/|agent/)|/applied\.json$' || true)
 
           if [ -n "$protected" ]; then
-            echo "::error::This PR modifies guardrail files:"
+            echo "::error::This PR modifies guardrail files (or an applied.json, which only the apply pipeline writes):"
             echo "$protected"
             echo ""
             echo "Guardrails are changed deliberately by a human, in a separate PR,"

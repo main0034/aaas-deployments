@@ -81,6 +81,21 @@ def validate(deployment: Path, validator: Draft202012Validator) -> list[str]:
             fail(deployment, f'backend.hcl must set: key = "{expected_key}"')
         )
 
+    # The module version is pinned twice in main.tf - the ?ref= that fetches the
+    # source, and module_version, which app-stack >= 0.4.0 checks against its own
+    # version and writes to every resource's aaasModule tag (OQ-16). They must
+    # name the same release, or the estate's tags would lie about what it runs.
+    main_tf = (deployment / "main.tf").read_text()
+    ref = re.search(r"app-stack\?ref=v(\d+\.\d+\.\d+)\b", main_tf)
+    pinned = re.search(r'^\s*module_version\s*=\s*"([^"]*)"', main_tf, re.M)
+    if ref and pinned and ref.group(1) != pinned.group(1):
+        errors.append(
+            fail(
+                deployment,
+                f"main.tf pins app-stack ref v{ref.group(1)} but module_version = \"{pinned.group(1)}\"; they must be the same release",
+            )
+        )
+
     return errors
 
 
