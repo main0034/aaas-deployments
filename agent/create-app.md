@@ -60,6 +60,11 @@ genuinely needs to change, say so and stop.
 
 ## 2. Understand the request before writing code
 
+Requests follow `requests/TEMPLATE.md` in the app repo: **Rules** and **Interface**
+are what you are held to (someone else has written tests from them), **Examples** are
+cases that must come out as written, and **Open questions** are for a human - build
+around them and say so in the pull request.
+
 Ask about anything that changes the data model, because a schema is expensive to
 change later and the requester will not think to volunteer it:
 

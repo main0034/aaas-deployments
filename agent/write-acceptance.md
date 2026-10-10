@@ -19,7 +19,9 @@ implementation agree with it by construction. Do not try to find the change.
 ## 1. Read
 
 - The request. Its **Interface** section is fixed: routes, parameters, status codes,
-  response shapes. Call exactly what it names.
+  response shapes. Call exactly what it names. Requests follow `requests/TEMPLATE.md`
+  in the app repo: every line under **Rules** is a statement to test, every
+  **Examples** line is a test as written, and **Open questions** are not tested.
 - `AGENT.md` and `src/App/Program.cs`, for the existing routes and the JSON shape of
   existing resources. The request may say "in the same shape `GET /items` returns".
 - `tests/App.Tests/Acceptance/AcceptanceBase.cs`: your base class.
