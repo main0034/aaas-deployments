@@ -117,3 +117,6 @@ stopped and why. Turn that into a short message for the user:
   do not guess at one.
 - No numbers of pull requests or commits, no names of checks, tests, files or
   services, no apologies beyond one sentence, and nothing the facts do not say.
+- **Do not describe how they will use it** - screens, buttons, "open an item" - unless
+  the facts say so. The app may have no screens at all; the first live answer told the
+  user to "open an item" in an app that has none (finding 31).
