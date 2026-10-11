@@ -1,10 +1,10 @@
 {
   "deployment": "deployments/dev/demo",
-  "image": "ghcr.io/main0034/aaas-app-demo:b397f6bd176f8b52487100ee07b4d8b15ea0747a",
+  "image": "ghcr.io/main0034/aaas-app-demo:e4d1b781aa426a23e0d483dc90b1e47f9ed9bbde",
   "module": "app-stack@0.4.0",
   "migration": "20261010133821_AddProjects",
-  "revision": "ca-demo-dev--0000002",
-  "commit": "887003e22d8931c74bea021e0775120ad536a088",
-  "applied_at": "2026-10-11T14:05:38Z",
-  "run": "https://github.com/main0034/aaas-deployments/actions/runs/38145635986"
+  "revision": "ca-demo-dev--0000003",
+  "commit": "ed1d6fe3dfae7f5ed9f546346820fad071ae906a",
+  "applied_at": "2026-10-11T14:33:45Z",
+  "run": "https://github.com/main0034/aaas-deployments/actions/runs/38147545122"
 }
