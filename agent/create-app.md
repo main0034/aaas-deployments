@@ -110,11 +110,32 @@ Pin every dependency. Versions live only in `Directory.Packages.props`; after
 adding a package, run `dotnet restore` and commit the updated
 `packages.lock.json` files, or CI's locked restore fails.
 
+### The screen
+
+The person who asked uses the app through its pages, never through a route. **If the
+request has a *Screen* section, or the change is something a person will look at, add
+or change, build its page in the same pull request**, as `AGENT.md` ("Screens")
+describes:
+
+- Blazor components in `src/App/Components/Pages/`, rendered statically on the server.
+  No render mode, no JavaScript
+- the page calls the routes through `AppApi`, never `AppDbContext`. A rule lives in
+  the route only; the page shows the route's own reasons when it refuses
+- `@page "/"` is the start page; every other page path starts with `/app/`. A new page
+  is reachable: link to it from the page the user starts on (the list, or the item)
+- a `<PageTitle>` in the user's words ("Edit item"). The harness tells the user where
+  to look by these titles, from the pages your pull request changes
+- a page test (`PageTest`, `tests/App.Tests/Pages/`) that renders it against seeded
+  rows and, for a form, submits it once accepted and once refused
+
+The spec-testers test the routes in *Interface*, not the page. The page test is yours.
+
 ## 4. Prove it before anyone looks at it
 
 ```bash
 dotnet csharpier format .
 python3 scripts/check-test-layout.py --files <each test file you added or changed>
+python3 scripts/check-pages.py
 dotnet build -c Release
 dotnet test -c Release --no-build
 dotnet ef migrations has-pending-model-changes --project src/App --no-build --configuration Release
@@ -163,7 +184,7 @@ or look for another way to push.
 
 Write the body for the person who asked, not for a reviewer of code:
 
-- what the application now does, in their words
+- what the application now does, in their words, and on which page
 - what you assumed, and what you had to ask about
 - anything you deliberately left out, and why
 - that merging it builds the image and opens a second PR that does the actual

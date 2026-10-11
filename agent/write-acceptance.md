@@ -22,6 +22,8 @@ implementation agree with it by construction. Do not try to find the change.
   response shapes. Call exactly what it names. Requests follow `requests/TEMPLATE.md`
   in the app repo: every line under **Rules** is a statement to test, every
   **Examples** line is a test as written, and **Open questions** are not tested.
+- The request's **Screen** section describes a page. Ignore it: you test the routes
+  in **Interface**. The builder tests the page itself.
 - `AGENT.md` and `src/App/Program.cs`, for the existing routes and the JSON shape of
   existing resources. The request may say "in the same shape `GET /items` returns".
 - `tests/App.Tests/Acceptance/AcceptanceBase.cs`: your base class.
