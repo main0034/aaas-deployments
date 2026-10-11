@@ -11,6 +11,11 @@
 #
 # Bump `ref` and `module_version` together, deliberately, to adopt a new
 # module version.
+#
+# Region: this dev demo runs in northeurope, a dev-only exception to D-13
+# (residency in swedencentral). Three creates on 10-11 October found no Postgres
+# Burstable capacity in swedencentral; the demo holds no real data. Customer
+# estates stay in swedencentral.
 ###############################################################################
 
 terraform {
